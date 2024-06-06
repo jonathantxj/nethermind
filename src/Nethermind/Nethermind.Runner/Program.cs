@@ -39,6 +39,7 @@ using Nethermind.Runner.Logging;
 using Nethermind.Seq.Config;
 using Nethermind.Serialization.Json;
 using Nethermind.UPnP.Plugin;
+using Nethermind.Fossil;
 using NLog;
 using NLog.Config;
 using ILogger = Nethermind.Logging.ILogger;
@@ -149,7 +150,8 @@ public static class Program
             typeof(EthashPlugin),
             typeof(NethDevPlugin),
             typeof(HivePlugin),
-            typeof(UPnPPlugin)
+            typeof(UPnPPlugin),
+            typeof(FossilPlugin)
         );
 
         // leaving here as an example of adding Debug plugin
