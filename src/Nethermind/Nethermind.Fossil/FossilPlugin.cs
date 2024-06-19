@@ -18,6 +18,7 @@ namespace Nethermind.Fossil
         private INethermindApi _api = null!;
         private ILogger _logger;
         private BlockHeadersDBWriter? _dbWriter;
+        private IBlockTree? _blockTree;
         public virtual string Name => "Fossil";
         public virtual string Description => "Block DB Access plugin for Fossil";
         public string Author => "Nethermind";
@@ -27,9 +28,10 @@ namespace Nethermind.Fossil
             _api = nethermindApi ?? throw new ArgumentNullException(nameof(nethermindApi));
             _logger = nethermindApi.LogManager.GetClassLogger();
             _dbWriter = BlockHeadersDBWriter.SetupBlockHeadersDBWriter(_logger).Result;
+            _blockTree = nethermindApi.BlockTree!;
 
             IDb? blockDb = _api.DbProvider?.BlocksDb;
-            
+
 
             if (blockDb == null)
                 {
@@ -42,7 +44,8 @@ namespace Nethermind.Fossil
             var blocks = blockDb.GetAllValues().Select(
                     entry => {
                         var block = _blockDecoder.Decode(new RlpStream(entry), RlpBehaviors.None);
-                        if (block == null) return null;
+                        if (block == null || !_blockTree.IsMainChain(block.Header)) return null;
+
                         Parallel.ForEach(block.Transactions, tx =>
                         {
                             tx.SenderAddress ??= _api.EthereumEcdsa?.RecoverAddress(tx);

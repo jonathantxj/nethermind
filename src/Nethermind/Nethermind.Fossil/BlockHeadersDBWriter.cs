@@ -19,7 +19,7 @@ namespace Nethermind.Fossil
             CREATE TABLE IF NOT EXISTS blockheaders (
             author CHAR(42),
             block_hash CHAR(66) PRIMARY KEY,
-            number BIGINT,
+            number BIGINT UNIQUE,
             parent_hash CHAR(66),
             beneficiary CHAR(42),
             gas_limit BIGINT NOT NULL,
@@ -47,7 +47,7 @@ namespace Nethermind.Fossil
             CREATE TABLE IF NOT EXISTS transactions (
             block_number BIGINT,
             block_hash CHAR(66) REFERENCES blockheaders(block_hash),
-            transaction_hash CHAR(66),
+            transaction_hash CHAR(66) PRIMARY KEY,
             mint VARCHAR(78),
             source_hash CHAR(66),
             nonce VARCHAR(78) NOT NULL,
