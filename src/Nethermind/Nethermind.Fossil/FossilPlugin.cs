@@ -19,29 +19,39 @@ namespace Nethermind.Fossil
         private ILogger _logger;
         private BlockHeadersDBWriter? _dbWriter;
         public virtual string Name => "Fossil";
-        public virtual string Description => "Blockheaders DB Access plugin for Fossil";
+        public virtual string Description => "Block DB Access plugin for Fossil";
         public string Author => "Nethermind";
 
         public Task Init(INethermindApi nethermindApi)
         {
             _api = nethermindApi ?? throw new ArgumentNullException(nameof(nethermindApi));
             _logger = nethermindApi.LogManager.GetClassLogger();
-            _dbWriter = BlockHeadersDBWriter.SetupBlockHeadersDBWriter().Result;
+            _dbWriter = BlockHeadersDBWriter.SetupBlockHeadersDBWriter(_logger).Result;
 
-            IDb? headersDb = _api.DbProvider?.HeadersDb;
+            IDb? blockDb = _api.DbProvider?.BlocksDb;
+            
 
-            if (headersDb == null)
+            if (blockDb == null)
                 {
-                    _logger.Warn("HeadersDB is null");
+                    _logger.Warn("BlocksDB is null");
                     return Task.CompletedTask;
                 }
 
-            HeaderDecoder _headerDecoder = new HeaderDecoder();
+            BlockDecoder _blockDecoder = new BlockDecoder();
 
-            var blockHeaders = headersDb.GetAllValues().Select(
-                entry => _headerDecoder.Decode(new RlpStream(entry), RlpBehaviors.None)
-                );
-            _dbWriter.WriteBinaryToDB(blockHeaders);
+            var blocks = blockDb.GetAllValues().Select(
+                    entry => {
+                        var block = _blockDecoder.Decode(new RlpStream(entry), RlpBehaviors.None);
+                        if (block == null) return null;
+                        Parallel.ForEach(block.Transactions, tx =>
+                        {
+                            tx.SenderAddress ??= _api.EthereumEcdsa?.RecoverAddress(tx);
+                        });
+                        return block;
+                    }
+                ).ToList();
+
+            _dbWriter.WriteBinaryToDB(blocks);
 
             return Task.CompletedTask;
         }
