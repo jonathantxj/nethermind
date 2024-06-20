@@ -65,8 +65,6 @@ namespace Nethermind.Fossil
             v VARCHAR(78)
             );";
 
-        private const string CONNECTION_STRING = @"CONNETION_STRING";
-
         private static NpgsqlDataSource? _dataSource;
 
         // SETUP DB
@@ -76,9 +74,9 @@ namespace Nethermind.Fossil
             _dataSource = dataSource;
         }
 
-        async public static Task<BlockHeadersDBWriter> SetupBlockHeadersDBWriter(ILogger logger) {
+        async public static Task<BlockHeadersDBWriter> SetupBlockHeadersDBWriter(ILogger logger, string connectionString) {
             _logger = logger;
-            NpgsqlDataSource dataSource = NpgsqlDataSource.Create(CONNECTION_STRING);
+            NpgsqlDataSource dataSource = NpgsqlDataSource.Create(connectionString);
             var dropCommand = dataSource.CreateCommand(DROP_TABLES);
             await dropCommand.ExecuteNonQueryAsync();
             var createBlockheadersTableCommand = dataSource.CreateCommand(CREATE_BLOCKHEADERS_TABLE);

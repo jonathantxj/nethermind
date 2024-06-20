@@ -26,12 +26,22 @@ namespace Nethermind.Fossil
         public Task Init(INethermindApi nethermindApi)
         {
             _api = nethermindApi ?? throw new ArgumentNullException(nameof(nethermindApi));
+
+            var (getFromAPi, _) = _api.ForInit;
+            var _fossilConfig = getFromAPi.Config<IFossilConfig>();
+
+            var connectionString = _fossilConfig.ConnectionString;
+            if (connectionString == null) {
+                _logger.Info($"{nameof(FossilPlugin)} disabled");
+                return Task.CompletedTask;
+            }
+
             _logger = nethermindApi.LogManager.GetClassLogger();
-            _dbWriter = BlockHeadersDBWriter.SetupBlockHeadersDBWriter(_logger).Result;
+            _logger.Info($"{nameof(FossilPlugin)} enabled");
+
             _blockTree = nethermindApi.BlockTree!;
-
+            _dbWriter = BlockHeadersDBWriter.SetupBlockHeadersDBWriter(_logger, connectionString).Result;
             IDb? blockDb = _api.DbProvider?.BlocksDb;
-
 
             if (blockDb == null)
                 {
@@ -59,14 +69,6 @@ namespace Nethermind.Fossil
             return Task.CompletedTask;
         }
 
-        public ValueTask DisposeAsync() { return ValueTask.CompletedTask; }
-        public Task InitNetworkProtocol()
-        {
-            return Task.CompletedTask;
-        }
-        public Task InitRpcModules()
-        {
-            return Task.CompletedTask;
-        }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
