@@ -51,7 +51,7 @@ namespace Nethermind.Fossil
 
             BlockDecoder _blockDecoder = new BlockDecoder();
 
-            var blocks = blockDb.GetAllValues().Select(
+            var blocks = blockDb.GetAllValues().Skip(1).Select(
                     entry => {
                         var block = _blockDecoder.Decode(new RlpStream(entry), RlpBehaviors.None);
                         if (block == null || !_blockTree.IsMainChain(block.Header)) return null;
