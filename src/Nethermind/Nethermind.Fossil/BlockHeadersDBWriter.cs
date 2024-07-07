@@ -166,7 +166,7 @@ namespace Nethermind.Fossil
                     }
                     transactionWriter.Complete();
                 }
-                _logger.Info("[BlockHeadersDBWriter]: DB dump complete.");
+                _logger.Info("[BlockHeadersDBWriter]: Finished writing blocks");
                 conn.Close();
             }
         }

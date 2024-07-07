@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Linq;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -43,29 +44,34 @@ namespace Nethermind.Fossil
             _dbWriter = BlockHeadersDBWriter.SetupBlockHeadersDBWriter(_logger, connectionString).Result;
             IDb? blockDb = _api.DbProvider?.BlocksDb;
 
-            if (blockDb == null)
-                {
-                    _logger.Warn("BlocksDB is null");
-                    return Task.CompletedTask;
+            if (blockDb != null) {
+                    Task.Run( () => {
+                        var blocks = blockDb.GetAllValues().Skip(1).Chunk(10000);
+                        var maxDegrees = System.Environment.ProcessorCount;
+                        
+                        foreach (var chunks in blocks) {
+                            var parsedChunks = chunks.Select(
+                                rlpBlock => {
+                                    BlockDecoder blockDecoder = new BlockDecoder();
+                                    var block = blockDecoder.Decode(new RlpStream(rlpBlock), RlpBehaviors.None);
+                                    if (block == null || !_blockTree.IsMainChain(block.Header)) return null;
+
+                                    Parallel.ForEach(block.Transactions,
+                                                    new ParallelOptions { MaxDegreeOfParallelism = maxDegrees },
+                                                    tx =>
+                                    {
+                                        tx.SenderAddress ??= _api.EthereumEcdsa?.RecoverAddress(tx);
+                                    });
+                                    if (block.Number % 5000 == 0) {
+                                            _logger.Info($"{block.Number}");
+                                    }
+                                    return block;
+                                }
+                            ).ToList();
+                            _dbWriter.WriteBinaryToDB(parsedChunks);
+                        }
+                    });
                 }
-
-            BlockDecoder _blockDecoder = new BlockDecoder();
-
-            var blocks = blockDb.GetAllValues().Skip(1).Select(
-                    entry => {
-                        var block = _blockDecoder.Decode(new RlpStream(entry), RlpBehaviors.None);
-                        if (block == null || !_blockTree.IsMainChain(block.Header)) return null;
-
-                        Parallel.ForEach(block.Transactions, tx =>
-                        {
-                            tx.SenderAddress ??= _api.EthereumEcdsa?.RecoverAddress(tx);
-                        });
-                        return block;
-                    }
-                ).ToList();
-
-            _dbWriter.WriteBinaryToDB(blocks);
-
             return Task.CompletedTask;
         }
 
