@@ -10,9 +10,9 @@ using Nethermind.Core;
 using Nethermind.Db;
 using Nethermind.Serialization.Rlp;
 using Nethermind.Logging;
-        
 
-namespace Nethermind.Fossil 
+
+namespace Nethermind.Fossil
 {
     public class FossilPlugin : INethermindPlugin
     {
@@ -20,10 +20,12 @@ namespace Nethermind.Fossil
         private ILogger _logger;
         private BlockHeadersDBWriter? _dbWriter;
         private IBlockTree? _blockTree;
+        private static Semaphore? _pool;
         public virtual string Name => "Fossil";
         public virtual string Description => "Block DB Access plugin for Fossil";
         public string Author => "Nethermind";
 
+        const int MAX_THREADS = 1000;
         public Task Init(INethermindApi nethermindApi)
         {
             _api = nethermindApi ?? throw new ArgumentNullException(nameof(nethermindApi));
@@ -32,7 +34,8 @@ namespace Nethermind.Fossil
             var _fossilConfig = getFromAPi.Config<IFossilConfig>();
 
             var connectionString = _fossilConfig.ConnectionString;
-            if (connectionString == null) {
+            if (connectionString == null)
+            {
                 _logger.Info($"{nameof(FossilPlugin)} disabled");
                 return Task.CompletedTask;
             }
@@ -44,34 +47,42 @@ namespace Nethermind.Fossil
             _dbWriter = BlockHeadersDBWriter.SetupBlockHeadersDBWriter(_logger, connectionString).Result;
             IDb? blockDb = _api.DbProvider?.BlocksDb;
 
-            if (blockDb != null) {
-                    Task.Run( () => {
-                        var blocks = blockDb.GetAllValues().Skip(1).Chunk(10000);
-                        var maxDegrees = System.Environment.ProcessorCount;
-                        
-                        foreach (var chunks in blocks) {
-                            var parsedChunks = chunks.Select(
-                                rlpBlock => {
-                                    BlockDecoder blockDecoder = new BlockDecoder();
-                                    var block = blockDecoder.Decode(new RlpStream(rlpBlock), RlpBehaviors.None);
-                                    if (block == null || !_blockTree.IsMainChain(block.Header)) return null;
+            _pool = new Semaphore(initialCount: 0, maximumCount: MAX_THREADS);
 
-                                    Parallel.ForEach(block.Transactions,
-                                                    new ParallelOptions { MaxDegreeOfParallelism = maxDegrees },
-                                                    tx =>
-                                    {
-                                        tx.SenderAddress ??= _api.EthereumEcdsa?.RecoverAddress(tx);
-                                    });
-                                    if (block.Number % 5000 == 0) {
-                                            _logger.Info($"{block.Number}");
-                                    }
-                                    return block;
-                                }
-                            ).ToList();
-                            _dbWriter.WriteBinaryToDB(parsedChunks);
+            if (blockDb == null)
+            {
+                _logger.Info("blocksDB is null");
+                return Task.CompletedTask;
+            }
+
+            var chunks = blockDb.GetAllValues().Skip(6650000).Chunk(10_000);
+
+            foreach (var chunk in chunks)
+            {
+                Parallel.ForEach(
+                    chunk,
+                    rlpBlock =>
+                    {
+                        BlockDecoder blockDecoder = new BlockDecoder();
+                        var block = blockDecoder.Decode(new RlpStream(rlpBlock), RlpBehaviors.None);
+                        if (block == null || !_blockTree.IsMainChain(block.Header) || block.Number <= 6_580_999) return;
+
+                        _pool.WaitOne();
+                        var res = _dbWriter.WriteBlockToDB(block, _api.EthereumEcdsa!);
+                        _pool.Release();
+
+                        if (res.IsFaulted)
+                        {
+                            _logger.Warn($"Restart from {block.Number}");
+                            throw new Exception($"Restart from {block.Number}");
                         }
-                    });
-                }
+                        else if (rlpBlock == chunk.Last())
+                        {
+                            _logger.Info($"[FossilPlugin]: Finished writing blocks: Last: {block.Number}");
+                        }
+                    }
+                );
+            }
             return Task.CompletedTask;
         }
 
