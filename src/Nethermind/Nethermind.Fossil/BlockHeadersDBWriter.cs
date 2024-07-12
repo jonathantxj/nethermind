@@ -3,7 +3,9 @@ using System.Linq;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Npgsql;
+using NpgsqlTypes;
 using Nethermind.Core;
+using Nethermind.Crypto;
 using Nethermind.Serialization.Rlp;
 using Nethermind.Logging;
         
@@ -65,10 +67,18 @@ namespace Nethermind.Fossil
             v VARCHAR(78)
             );";
 
+        private const string INSERT_BLOCKHEADERS = @"INSERT INTO blockheaders (
+            author, block_hash, number, parent_hash, beneficiary, gas_limit, gas_used, 
+            timestamp, extra_data, difficulty, mix_hash, nonce, uncles_hash, 
+            transaction_root, receipts_root, state_root, base_fee_per_gas, 
+            withdrawals_root, parent_beacon_block_root, blob_gas_used, 
+            excess_blob_gas, total_difficulty, step, signature
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
+                $19, $20, $21, $22, $23, $24)
+        ON CONFLICT (block_hash) DO NOTHING";
+
         private static NpgsqlDataSource? _dataSource;
-
-        // SETUP DB
-
 
         private BlockHeadersDBWriter(NpgsqlDataSource dataSource) {
             _dataSource = dataSource;
@@ -77,8 +87,8 @@ namespace Nethermind.Fossil
         async public static Task<BlockHeadersDBWriter> SetupBlockHeadersDBWriter(ILogger logger, string connectionString) {
             _logger = logger;
             NpgsqlDataSource dataSource = NpgsqlDataSource.Create(connectionString);
-            var dropCommand = dataSource.CreateCommand(DROP_TABLES);
-            await dropCommand.ExecuteNonQueryAsync();
+            // var dropCommand = dataSource.CreateCommand(DROP_TABLES);
+            // await dropCommand.ExecuteNonQueryAsync();
             var createBlockheadersTableCommand = dataSource.CreateCommand(CREATE_BLOCKHEADERS_TABLE);
             await createBlockheadersTableCommand.ExecuteNonQueryAsync();
             var createTransactionsTableCommand = dataSource.CreateCommand(CREATE_TRANSACTIONS_TABLE);
@@ -94,81 +104,97 @@ namespace Nethermind.Fossil
             return string.Format("0x{0:X}", ul);
         }
 
-        public void WriteBinaryToDB(List<Block?> blocks) {
-            using (var conn = _dataSource!.OpenConnection()) {
-                _logger.Info("[BlockHeadersDBWriter]: Writing headers...");
-                using (var headerWriter = conn.BeginBinaryImport(
-                    "copy blockheaders from STDIN (FORMAT BINARY)"))
-                    {
+        public void WriteBinaryToDB(IEnumerable<Block?> blocks, IEthereumEcdsa ethereumEcdsa) {
+            var firstBlock = blocks.First()?.Number;
 
-                        foreach (var block in blocks)
-                        {
-                            if (block == null) continue;
-                            headerWriter.StartRow();
-                            headerWriter.Write((object?) block.Author?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                            headerWriter.Write((object?) block.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                            headerWriter.Write(block.Number, NpgsqlTypes.NpgsqlDbType.Bigint);
-                            headerWriter.Write((object?) block.ParentHash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                            headerWriter.Write((object?) block.Beneficiary?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                            headerWriter.Write(block.GasLimit, NpgsqlTypes.NpgsqlDbType.Bigint);
-                            headerWriter.Write(block.GasUsed, NpgsqlTypes.NpgsqlDbType.Bigint);
-                            headerWriter.Write(block.TimestampDate, NpgsqlTypes.NpgsqlDbType.Timestamp);
-                            headerWriter.Write(block.ExtraData, NpgsqlTypes.NpgsqlDbType.Bytea);
-                            headerWriter.Write(block.Difficulty.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                            headerWriter.Write((object?) block.MixHash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                            headerWriter.Write(ULongToHexString(block.Nonce)!, NpgsqlTypes.NpgsqlDbType.Varchar);
-                            headerWriter.Write((object?) block.UnclesHash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                            headerWriter.Write((object?) block.TxRoot?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                            headerWriter.Write((object?) block.ReceiptsRoot?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                            headerWriter.Write((object?) block.StateRoot?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                            headerWriter.Write(block.BaseFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                            headerWriter.Write((object?) block.WithdrawalsRoot?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                            headerWriter.Write((object?) block.ParentBeaconBlockRoot?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                            headerWriter.Write((object?) ULongToHexString(block.BlobGasUsed) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);
-                            headerWriter.Write((object?) ULongToHexString(block.ExcessBlobGas) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);
-                            headerWriter.Write((object?) block.TotalDifficulty?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);
-                            headerWriter.Write((object?) block.Header.AuRaStep ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Bigint);
-                            headerWriter.Write((object?) block.Header.AuRaSignature ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Bytea);
-                        }
-                        headerWriter.Complete();
-                    }
-                _logger.Info("[BlockHeadersDBWriter]: Writing transactions...");
-                using (var transactionWriter = conn.BeginBinaryImport(
-                    "copy transactions from STDIN (FORMAT BINARY)"))
-                    {
-                        foreach (var block in blocks)
-                        {
-                            if (block == null) continue;
-                            int count = 0;
-                            foreach (var transaction in block.Transactions)
+            Parallel.ForEach(
+                blocks,
+                new ParallelOptions { MaxDegreeOfParallelism = 750 },
+                block => {
+                    if (block == null) return;
+                        using (var conn = _dataSource!.OpenConnection()) {
+                            for (int i = 0; i < 50; i++) 
                             {
-                                count++;
-                                transactionWriter.StartRow();
-                                transactionWriter.Write(block.Number, NpgsqlTypes.NpgsqlDbType.Bigint);
-                                transactionWriter.Write((object?) block.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                transactionWriter.Write((object?) transaction.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                transactionWriter.Write(transaction.Mint.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write((object?) transaction.SourceHash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                transactionWriter.Write(transaction.Nonce.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write(count, NpgsqlTypes.NpgsqlDbType.Integer);
-                                transactionWriter.Write((object?) transaction.SenderAddress?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                transactionWriter.Write((object?) transaction.To?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                transactionWriter.Write(transaction.Value.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write(transaction.GasPrice.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write(transaction.MaxPriorityFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write(transaction.MaxFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write(transaction.GasPrice.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write(transaction.Data, NpgsqlTypes.NpgsqlDbType.Bytea);
-                                transactionWriter.Write((object?) ULongToHexString(transaction.ChainId) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write((object?) ((byte?) transaction.Type) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Smallint);
-                                transactionWriter.Write((object?) ULongToHexString(transaction.Signature?.V) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);                            
+                            using var tx = conn.BeginTransaction();
+                            try
+                            {
+                                using var cmd = new NpgsqlCommand(INSERT_BLOCKHEADERS, conn, tx)
+                                    {
+                                        Parameters =
+                                        {
+                                            new() { Value = (object?)block.Author?.ToString() ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Char },
+                                            new() { Value = (object?)block.Hash?.ToString() ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Char },
+                                            new() { Value = block.Number, NpgsqlDbType = NpgsqlDbType.Bigint },
+                                            new() { Value = (object?)block.ParentHash?.ToString() ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Char },
+                                            new() { Value = (object?)block.Beneficiary?.ToString() ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Char },
+                                            new() { Value = block.GasLimit, NpgsqlDbType = NpgsqlDbType.Bigint },
+                                            new() { Value = block.GasUsed, NpgsqlDbType = NpgsqlDbType.Bigint },
+                                            new() { Value = block.TimestampDate, NpgsqlDbType = NpgsqlDbType.Timestamp },
+                                            new() { Value = block.ExtraData, NpgsqlDbType = NpgsqlDbType.Bytea },
+                                            new() { Value = block.Difficulty.ToString(), NpgsqlDbType = NpgsqlDbType.Varchar },
+                                            new() { Value = (object?)block.MixHash?.ToString() ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Char },
+                                            new() { Value = ULongToHexString(block.Nonce)!, NpgsqlDbType = NpgsqlDbType.Varchar },
+                                            new() { Value = (object?)block.UnclesHash?.ToString() ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Char },
+                                            new() { Value = (object?)block.TxRoot?.ToString() ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Char },
+                                            new() { Value = (object?)block.ReceiptsRoot?.ToString() ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Char },
+                                            new() { Value = (object?)block.StateRoot?.ToString() ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Char },
+                                            new() { Value = block.BaseFeePerGas.ToString(), NpgsqlDbType = NpgsqlDbType.Varchar },
+                                            new() { Value = (object?)block.WithdrawalsRoot?.ToString() ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Char },
+                                            new() { Value = (object?)block.ParentBeaconBlockRoot?.ToString() ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Char },
+                                            new() { Value = (object?)ULongToHexString(block.BlobGasUsed) ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Varchar },
+                                            new() { Value = (object?)ULongToHexString(block.ExcessBlobGas) ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Varchar },
+                                            new() { Value = (object?)block.TotalDifficulty?.ToString() ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Varchar },
+                                            new() { Value = (object?)block.Header.AuRaStep ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Bigint },
+                                            new() { Value = (object?)block.Header.AuRaSignature ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Bytea }
+                                        }
+                                    };
+                                cmd.ExecuteNonQuery();
+
+                                int count = 0;
+                                using (var transactionWriter = conn.BeginBinaryImport(
+                                    "copy transactions from STDIN (FORMAT BINARY)"))
+                                {
+                                    foreach (var transaction in block.Transactions)
+                                    {
+                                        count++;
+                                        transactionWriter.StartRow();
+                                        transactionWriter.Write(block.Number, NpgsqlTypes.NpgsqlDbType.Bigint);
+                                        transactionWriter.Write((object?) block.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                        transactionWriter.Write((object?) transaction.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                        transactionWriter.Write(transaction.Mint.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                        transactionWriter.Write((object?) transaction.SourceHash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                        transactionWriter.Write(transaction.Nonce.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                        transactionWriter.Write(count, NpgsqlTypes.NpgsqlDbType.Integer);
+                                        transactionWriter.Write((object?) ethereumEcdsa.RecoverAddress(transaction)?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                        transactionWriter.Write((object?) transaction.To?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                        transactionWriter.Write(transaction.Value.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                        transactionWriter.Write(transaction.GasPrice.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                        transactionWriter.Write(transaction.MaxPriorityFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                        transactionWriter.Write(transaction.MaxFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                        transactionWriter.Write(transaction.GasPrice.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                        transactionWriter.Write(transaction.Data, NpgsqlTypes.NpgsqlDbType.Bytea);
+                                        transactionWriter.Write((object?) ULongToHexString(transaction.ChainId) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);
+                                        transactionWriter.Write((object?) ((byte?) transaction.Type) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Smallint);
+                                        transactionWriter.Write((object?) ULongToHexString(transaction.Signature?.V) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);                            
+                                    }
+                                    transactionWriter.Complete();
+                                }
+                                tx.Commit();
+                                conn.Close();
+                                return;
+                            }
+                            catch (Exception e)
+                            {
+                                _logger.Warn($"write error {e}");
+                                tx.Rollback();
+                            }
                         }
+                        conn.Close();
+                        throw new Exception($"Restart from {firstBlock}");
                     }
-                    transactionWriter.Complete();
                 }
-                _logger.Info("[BlockHeadersDBWriter]: Finished writing blocks");
-                conn.Close();
-            }
+            );
+            _logger.Info($"[BlockHeadersDBWriter]: Finished writing blocks: Last: {blocks.Last()?.Number}");
         }
     }
 }

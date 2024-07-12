@@ -44,34 +44,24 @@ namespace Nethermind.Fossil
             _dbWriter = BlockHeadersDBWriter.SetupBlockHeadersDBWriter(_logger, connectionString).Result;
             IDb? blockDb = _api.DbProvider?.BlocksDb;
 
-            if (blockDb != null) {
-                    Task.Run( () => {
-                        var blocks = blockDb.GetAllValues().Skip(1).Chunk(10000);
-                        var maxDegrees = System.Environment.ProcessorCount;
-                        
-                        foreach (var chunks in blocks) {
-                            var parsedChunks = chunks.Select(
-                                rlpBlock => {
-                                    BlockDecoder blockDecoder = new BlockDecoder();
-                                    var block = blockDecoder.Decode(new RlpStream(rlpBlock), RlpBehaviors.None);
-                                    if (block == null || !_blockTree.IsMainChain(block.Header)) return null;
+            if (blockDb == null) {
+                _logger.Info("blocksDB is null");
+                return Task.CompletedTask;
+            }
 
-                                    Parallel.ForEach(block.Transactions,
-                                                    new ParallelOptions { MaxDegreeOfParallelism = maxDegrees },
-                                                    tx =>
-                                    {
-                                        tx.SenderAddress ??= _api.EthereumEcdsa?.RecoverAddress(tx);
-                                    });
-                                    if (block.Number % 5000 == 0) {
-                                            _logger.Info($"{block.Number}");
-                                    }
-                                    return block;
-                                }
-                            ).ToList();
-                            _dbWriter.WriteBinaryToDB(parsedChunks);
-                        }
-                    });
-                }
+            var chunks = blockDb.GetAllValues().Skip(6650000).Chunk(10_000);
+
+            foreach (var chunk in chunks) {
+                IEnumerable<Block?> parsedChunk = chunk.AsParallel().Select(
+                    rlpBlock => {
+                        BlockDecoder blockDecoder = new BlockDecoder();
+                        var block = blockDecoder.Decode(new RlpStream(rlpBlock), RlpBehaviors.None);
+                        if (block == null || !_blockTree.IsMainChain(block.Header) || block.Number <= 6_580_999 ) return null;
+                        return block;
+                    }
+                );
+                _dbWriter.WriteBinaryToDB(parsedChunk, _api.EthereumEcdsa!);
+            }
             return Task.CompletedTask;
         }
 
