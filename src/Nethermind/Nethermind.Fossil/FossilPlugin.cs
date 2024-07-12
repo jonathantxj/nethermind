@@ -20,7 +20,7 @@ namespace Nethermind.Fossil
         private ILogger _logger;
         private BlockHeadersDBWriter? _dbWriter;
         private IBlockTree? _blockTree;
-        private static Semaphore? _pool;
+        private static SemaphoreSlim? _pool;
         public virtual string Name => "Fossil";
         public virtual string Description => "Block DB Access plugin for Fossil";
         public string Author => "Nethermind";
@@ -47,7 +47,7 @@ namespace Nethermind.Fossil
             _dbWriter = BlockHeadersDBWriter.SetupBlockHeadersDBWriter(_logger, connectionString).Result;
             IDb? blockDb = _api.DbProvider?.BlocksDb;
 
-            _pool = new Semaphore(initialCount: 0, maximumCount: MAX_THREADS);
+            _pool = new SemaphoreSlim(MAX_THREADS, MAX_THREADS);
 
             if (blockDb == null)
             {
@@ -55,8 +55,7 @@ namespace Nethermind.Fossil
                 return Task.CompletedTask;
             }
 
-            var chunks = blockDb.GetAllValues().Skip(6650000).Chunk(10_000);
-
+            var chunks = blockDb.GetAllValues().Skip(7585000).Chunk(10_000);
             foreach (var chunk in chunks)
             {
                 Parallel.ForEach(
@@ -65,16 +64,16 @@ namespace Nethermind.Fossil
                     {
                         BlockDecoder blockDecoder = new BlockDecoder();
                         var block = blockDecoder.Decode(new RlpStream(rlpBlock), RlpBehaviors.None);
-                        if (block == null || !_blockTree.IsMainChain(block.Header) || block.Number <= 6_580_999) return;
+                        if (block == null || !_blockTree.IsMainChain(block.Header) || block.Number < 7585000) return;
 
-                        _pool.WaitOne();
+                        _pool.Wait();
                         var res = _dbWriter.WriteBlockToDB(block, _api.EthereumEcdsa!);
                         _pool.Release();
 
                         if (res.IsFaulted)
                         {
-                            _logger.Warn($"Restart from {block.Number}");
-                            throw new Exception($"Restart from {block.Number}");
+                            _logger.Warn($"Error from {block.Number}");
+                            throw new Exception($"Error from {block.Number}");
                         }
                         else if (rlpBlock == chunk.Last())
                         {
