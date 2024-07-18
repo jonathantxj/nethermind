@@ -59,29 +59,37 @@ namespace Nethermind.Fossil
             var chunks = blockDb.GetAllValues().Skip(lastBlock + 1).Chunk(10_000);
             foreach (var chunk in chunks)
             {
-                Parallel.ForEach(
-                    chunk,
-                    rlpBlock =>
+                var tasks = chunk.AsParallel().Select(rlpBlock =>
+                {
+                    BlockDecoder blockDecoder = new BlockDecoder();
+                    var block = blockDecoder.Decode(new RlpStream(rlpBlock), RlpBehaviors.None);
+                    if (block == null || !_blockTree.IsMainChain(block.Header) || block.Number <= lastBlock)
+                        return Task.CompletedTask;
+                    Task task = new Task(async () =>
                     {
-                        BlockDecoder blockDecoder = new BlockDecoder();
-                        var block = blockDecoder.Decode(new RlpStream(rlpBlock), RlpBehaviors.None);
-                        if (block == null || !_blockTree.IsMainChain(block.Header) || block.Number <= lastBlock) return;
-
-                        _pool.Wait();
-                        var res = _dbWriter.WriteBlockToDB(block, _api.EthereumEcdsa!);
-                        _pool.Release();
-
-                        if (!res)
+                        await _pool.WaitAsync();
+                        try
                         {
-                            _logger.Warn($"Error from {block.Number}");
-                            throw new Exception($"Error from {block.Number}");
+                            var res = await _dbWriter.WriteBlockToDB(block, _api.EthereumEcdsa!);
+                            if (!res)
+                            {
+                                _logger.Warn($"Error from {block.Number}");
+                                throw new Exception($"Error from {block.Number}");
+                            }
+                            else if (rlpBlock == chunk.Last())
+                            {
+                                _logger.Info($"[FossilPlugin]: Finished writing blocks: Last: {block.Number}");
+                            }
                         }
-                        else if (rlpBlock == chunk.Last())
+                        finally
                         {
-                            _logger.Info($"[FossilPlugin]: Finished writing blocks: Last: {block.Number}");
+                            _pool.Release();
                         }
-                    }
-                );
+                    });
+                    return task;
+                }).ToList();
+
+                Task.WhenAll(tasks);
             }
             return Task.CompletedTask;
         }
