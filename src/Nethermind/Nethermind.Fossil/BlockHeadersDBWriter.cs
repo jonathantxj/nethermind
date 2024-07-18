@@ -150,11 +150,14 @@ namespace Nethermind.Fossil
                                 new() { Value = (object?)block.Header.AuRaSignature ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Bytea }
                             }
                         };
+                        _logger.Info("Executing");
                         int rowsAffected = await cmd.ExecuteNonQueryAsync();
+                        _logger.Info("Executed");
 
                         if (rowsAffected > 0)
                         {
                             int count = 0;
+                            _logger.Info("Importing");
                             await using (var transactionWriter = await conn.BeginBinaryImportAsync(
                                 "copy transactions from STDIN (FORMAT BINARY)"))
                             {
@@ -181,10 +184,14 @@ namespace Nethermind.Fossil
                                     await transactionWriter.WriteAsync((object?)((byte?)transaction.Type) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Smallint);
                                     await transactionWriter.WriteAsync((object?)ULongToHexString(transaction.Signature?.V) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);
                                 }
+                                _logger.Info("Completing");
                                 await transactionWriter.CompleteAsync();
+                                _logger.Info("Completed");
                             }
                         }
+                        _logger.Info("Commiting");
                         await tx.CommitAsync();
+                        _logger.Info("Commited");
                         return true;
                     }
                     catch (Exception e)

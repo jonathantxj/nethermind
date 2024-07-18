@@ -56,7 +56,9 @@ namespace Nethermind.Fossil
             }
 
             var lastBlock = 11230241;
-            var chunks = blockDb.GetAllValues().Skip(lastBlock + 1).Chunk(10_000);
+            var chunks = blockDb.GetAllValues().Skip(lastBlock + 1).Chunk(100_000);
+            _logger.Info("Skipped");
+
             foreach (var chunk in chunks)
             {
                 var tasks = chunk.AsParallel().Select(rlpBlock =>
@@ -65,21 +67,25 @@ namespace Nethermind.Fossil
                     var block = blockDecoder.Decode(new RlpStream(rlpBlock), RlpBehaviors.None);
                     if (block == null || !_blockTree.IsMainChain(block.Header) || block.Number <= lastBlock)
                         return Task.CompletedTask;
+                    _logger.Info($"Decoded block {block.Number}");
 
                     return Task.Run(async () =>
                     {
-                        await _pool.WaitAsync();
+                        _logger.Info($"Waiting for pool for block {block.Number}");
+                        _pool.Wait();
+                        _logger.Info($"Running for block {block.Number}");
                         try
                         {
+                            _logger.Info($"Writing for block {block.Number}");
                             var res = await _dbWriter.WriteBlockToDB(block, _api.EthereumEcdsa!);
                             if (!res)
                             {
                                 _logger.Warn($"Error from {block.Number}");
                                 throw new Exception($"Error from {block.Number}");
                             }
-                            else if (rlpBlock == chunk.Last())
+                            else
                             {
-                                _logger.Info($"[FossilPlugin]: Finished writing blocks: Last: {block.Number}");
+                                _logger.Info($"[FossilPlugin]: Finished writing block: {block.Number}");
                             }
                         }
                         finally
