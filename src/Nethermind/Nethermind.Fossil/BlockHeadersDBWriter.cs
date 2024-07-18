@@ -109,18 +109,18 @@ namespace Nethermind.Fossil
         }
 
 
-        public async Task WriteBlockToDB(Block block, IEthereumEcdsa ethereumEcdsa)
+        public bool WriteBlockToDB(Block block, IEthereumEcdsa ethereumEcdsa)
         {
             int maxRetries = 50;
             for (int attempt = 0; attempt < maxRetries; attempt++)
             {
                 try
                 {
-                    await using var conn = await _dataSource!.OpenConnectionAsync();
-                    await using var tx = await conn.BeginTransactionAsync();
+                    using var conn = _dataSource!.OpenConnection();
+                    using var tx = conn.BeginTransaction();
                     try
                     {
-                        await using var cmd = new NpgsqlCommand(INSERT_BLOCKHEADERS, conn, tx)
+                        using var cmd = new NpgsqlCommand(INSERT_BLOCKHEADERS, conn, tx)
                         {
                             Parameters =
                             {
@@ -150,47 +150,49 @@ namespace Nethermind.Fossil
                                 new() { Value = (object?)block.Header.AuRaSignature ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Bytea }
                             }
                         };
-                        await cmd.ExecuteNonQueryAsync();
+                        int rowsAffected = cmd.ExecuteNonQuery();
 
-                        int count = 0;
-                        await using (var transactionWriter = await conn.BeginBinaryImportAsync(
-                            "copy transactions from STDIN (FORMAT BINARY)"))
-                        {
-                            foreach (var transaction in block.Transactions)
+                        if (rowsAffected > 0) {
+                            int count = 0;
+                            using (var transactionWriter = conn.BeginBinaryImport(
+                                "copy transactions from STDIN (FORMAT BINARY)"))
                             {
-                                count++;
-                                await transactionWriter.StartRowAsync();
-                                transactionWriter.Write(block.Number, NpgsqlTypes.NpgsqlDbType.Bigint);
-                                transactionWriter.Write((object?)block.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                transactionWriter.Write((object?)transaction.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                transactionWriter.Write(transaction.Mint.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write((object?)transaction.SourceHash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                transactionWriter.Write(transaction.Nonce.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write(count, NpgsqlTypes.NpgsqlDbType.Integer);
-                                transactionWriter.Write((object?)ethereumEcdsa.RecoverAddress(transaction)?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                transactionWriter.Write((object?)transaction.To?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                transactionWriter.Write(transaction.Value.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write(transaction.GasPrice.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write(transaction.MaxPriorityFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write(transaction.MaxFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write(transaction.GasPrice.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write(transaction.Data, NpgsqlTypes.NpgsqlDbType.Bytea);
-                                transactionWriter.Write((object?)ULongToHexString(transaction.ChainId) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);
-                                transactionWriter.Write((object?)((byte?)transaction.Type) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Smallint);
-                                transactionWriter.Write((object?)ULongToHexString(transaction.Signature?.V) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);
+                                foreach (var transaction in block.Transactions)
+                                {
+                                    count++;
+                                    transactionWriter.StartRow();
+                                    transactionWriter.Write(block.Number, NpgsqlTypes.NpgsqlDbType.Bigint);
+                                    transactionWriter.Write((object?)block.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                    transactionWriter.Write((object?)transaction.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                    transactionWriter.Write(transaction.Mint.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                    transactionWriter.Write((object?)transaction.SourceHash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                    transactionWriter.Write(transaction.Nonce.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                    transactionWriter.Write(count, NpgsqlTypes.NpgsqlDbType.Integer);
+                                    transactionWriter.Write((object?)ethereumEcdsa.RecoverAddress(transaction)?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                    transactionWriter.Write((object?)transaction.To?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                    transactionWriter.Write(transaction.Value.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                    transactionWriter.Write(transaction.GasPrice.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                    transactionWriter.Write(transaction.MaxPriorityFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                    transactionWriter.Write(transaction.MaxFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                    transactionWriter.Write(transaction.GasPrice.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                    transactionWriter.Write(transaction.Data, NpgsqlTypes.NpgsqlDbType.Bytea);
+                                    transactionWriter.Write((object?)ULongToHexString(transaction.ChainId) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);
+                                    transactionWriter.Write((object?)((byte?)transaction.Type) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Smallint);
+                                    transactionWriter.Write((object?)ULongToHexString(transaction.Signature?.V) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);
+                                }
+                                transactionWriter.Complete();
                             }
-                            await transactionWriter.CompleteAsync();
                         }
-                        await tx.CommitAsync();
-                        return;
+                        tx.Commit();
+                        return true;
                     }
                     catch (Exception e)
                     {
-                        await tx.RollbackAsync();
+                        tx.Rollback();
                         if (attempt == maxRetries - 1)
                         {
                             _logger.Error($"[BlockHeadersDBWriter]: Failed to write block {block.Number} after {maxRetries} attempts. {e}");
-                            throw;
+                            return false;
                         }
                         _logger.Warn($"[BlockHeadersDBWriter]: Write error with block {block.Number}. Retrying. {e}");
                     }
@@ -200,11 +202,12 @@ namespace Nethermind.Fossil
                     if (attempt == maxRetries - 1)
                     {
                         _logger.Error($"[BlockHeadersDBWriter]: Failed to open connection or begin transaction for block {block.Number} after {maxRetries} attempts. {e}");
-                        throw;
+                        return false;
                     }
                     _logger.Warn($"[BlockHeadersDBWriter]: Error opening connection or beginning transaction for block {block.Number}. Retrying. {e}");
                 }
             }
+            return false;
         }
     }
 }

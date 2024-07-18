@@ -25,7 +25,7 @@ namespace Nethermind.Fossil
         public virtual string Description => "Block DB Access plugin for Fossil";
         public string Author => "Nethermind";
 
-        const int MAX_THREADS = 1000;
+        const int MAX_THREADS = 1500;
         public Task Init(INethermindApi nethermindApi)
         {
             _api = nethermindApi ?? throw new ArgumentNullException(nameof(nethermindApi));
@@ -55,7 +55,8 @@ namespace Nethermind.Fossil
                 return Task.CompletedTask;
             }
 
-            var chunks = blockDb.GetAllValues().Skip(7585000).Chunk(10_000);
+            var lastBlock = 11230241;
+            var chunks = blockDb.GetAllValues().Skip(lastBlock + 1).Chunk(10_000);
             foreach (var chunk in chunks)
             {
                 Parallel.ForEach(
@@ -64,13 +65,13 @@ namespace Nethermind.Fossil
                     {
                         BlockDecoder blockDecoder = new BlockDecoder();
                         var block = blockDecoder.Decode(new RlpStream(rlpBlock), RlpBehaviors.None);
-                        if (block == null || !_blockTree.IsMainChain(block.Header) || block.Number < 7585000) return;
+                        if (block == null || !_blockTree.IsMainChain(block.Header) || block.Number <= lastBlock) return;
 
                         _pool.Wait();
                         var res = _dbWriter.WriteBlockToDB(block, _api.EthereumEcdsa!);
                         _pool.Release();
 
-                        if (res.IsFaulted)
+                        if (!res)
                         {
                             _logger.Warn($"Error from {block.Number}");
                             throw new Exception($"Error from {block.Number}");
