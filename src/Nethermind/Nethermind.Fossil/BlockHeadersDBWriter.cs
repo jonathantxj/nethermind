@@ -109,7 +109,7 @@ namespace Nethermind.Fossil
 
             Parallel.ForEach(
                 blocks,
-                new ParallelOptions { MaxDegreeOfParallelism = 750 },
+                new ParallelOptions { MaxDegreeOfParallelism = 1500 },
                 block => {
                     if (block == null) return;
                         using (var conn = _dataSource!.OpenConnection()) {
@@ -148,37 +148,40 @@ namespace Nethermind.Fossil
                                             new() { Value = (object?)block.Header.AuRaSignature ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Bytea }
                                         }
                                     };
-                                cmd.ExecuteNonQuery();
+                                int rowsAffected = cmd.ExecuteNonQuery();
 
-                                int count = 0;
-                                using (var transactionWriter = conn.BeginBinaryImport(
-                                    "copy transactions from STDIN (FORMAT BINARY)"))
-                                {
-                                    foreach (var transaction in block.Transactions)
+                                if (rowsAffected > 0) {
+                                    int count = 0;
+                                    using (var transactionWriter = conn.BeginBinaryImport(
+                                        "copy transactions from STDIN (FORMAT BINARY)"))
                                     {
-                                        count++;
-                                        transactionWriter.StartRow();
-                                        transactionWriter.Write(block.Number, NpgsqlTypes.NpgsqlDbType.Bigint);
-                                        transactionWriter.Write((object?) block.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                        transactionWriter.Write((object?) transaction.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                        transactionWriter.Write(transaction.Mint.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                        transactionWriter.Write((object?) transaction.SourceHash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                        transactionWriter.Write(transaction.Nonce.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                        transactionWriter.Write(count, NpgsqlTypes.NpgsqlDbType.Integer);
-                                        transactionWriter.Write((object?) ethereumEcdsa.RecoverAddress(transaction)?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                        transactionWriter.Write((object?) transaction.To?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
-                                        transactionWriter.Write(transaction.Value.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                        transactionWriter.Write(transaction.GasPrice.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                        transactionWriter.Write(transaction.MaxPriorityFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                        transactionWriter.Write(transaction.MaxFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                        transactionWriter.Write(transaction.GasPrice.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
-                                        transactionWriter.Write(transaction.Data, NpgsqlTypes.NpgsqlDbType.Bytea);
-                                        transactionWriter.Write((object?) ULongToHexString(transaction.ChainId) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);
-                                        transactionWriter.Write((object?) ((byte?) transaction.Type) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Smallint);
-                                        transactionWriter.Write((object?) ULongToHexString(transaction.Signature?.V) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);                            
+                                        foreach (var transaction in block.Transactions)
+                                        {
+                                            count++;
+                                            transactionWriter.StartRow();
+                                            transactionWriter.Write(block.Number, NpgsqlTypes.NpgsqlDbType.Bigint);
+                                            transactionWriter.Write((object?) block.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                            transactionWriter.Write((object?) transaction.Hash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                            transactionWriter.Write(transaction.Mint.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                            transactionWriter.Write((object?) transaction.SourceHash?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                            transactionWriter.Write(transaction.Nonce.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                            transactionWriter.Write(count, NpgsqlTypes.NpgsqlDbType.Integer);
+                                            transactionWriter.Write((object?) ethereumEcdsa.RecoverAddress(transaction)?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                            transactionWriter.Write((object?) transaction.To?.ToString() ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Char);
+                                            transactionWriter.Write(transaction.Value.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                            transactionWriter.Write(transaction.GasPrice.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                            transactionWriter.Write(transaction.MaxPriorityFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                            transactionWriter.Write(transaction.MaxFeePerGas.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                            transactionWriter.Write(transaction.GasPrice.ToString(), NpgsqlTypes.NpgsqlDbType.Varchar);
+                                            transactionWriter.Write(transaction.Data, NpgsqlTypes.NpgsqlDbType.Bytea);
+                                            transactionWriter.Write((object?) ULongToHexString(transaction.ChainId) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);
+                                            transactionWriter.Write((object?) ((byte?) transaction.Type) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Smallint);
+                                            transactionWriter.Write((object?) ULongToHexString(transaction.Signature?.V) ?? DBNull.Value, NpgsqlTypes.NpgsqlDbType.Varchar);                            
+                                        }
+                                        transactionWriter.Complete();
                                     }
-                                    transactionWriter.Complete();
                                 }
+                                
                                 tx.Commit();
                                 conn.Close();
                                 return;

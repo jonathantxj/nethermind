@@ -49,14 +49,16 @@ namespace Nethermind.Fossil
                 return Task.CompletedTask;
             }
 
-            var chunks = blockDb.GetAllValues().Skip(6650000).Chunk(10_000);
+            var lastBlock = ;
+            var chunks = blockDb.GetAllValues().Skip(lastBlock + 1).Chunk(100_000);
+            _logger.Info("Finished skip");
 
             foreach (var chunk in chunks) {
                 IEnumerable<Block?> parsedChunk = chunk.AsParallel().Select(
                     rlpBlock => {
                         BlockDecoder blockDecoder = new BlockDecoder();
                         var block = blockDecoder.Decode(new RlpStream(rlpBlock), RlpBehaviors.None);
-                        if (block == null || !_blockTree.IsMainChain(block.Header) || block.Number <= 6_580_999 ) return null;
+                        if (block == null || !_blockTree.IsMainChain(block.Header) || block.Number <= lastBlock ) return null;
                         return block;
                     }
                 );
