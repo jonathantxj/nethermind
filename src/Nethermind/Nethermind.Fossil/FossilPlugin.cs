@@ -65,7 +65,8 @@ namespace Nethermind.Fossil
                     var block = blockDecoder.Decode(new RlpStream(rlpBlock), RlpBehaviors.None);
                     if (block == null || !_blockTree.IsMainChain(block.Header) || block.Number <= lastBlock)
                         return Task.CompletedTask;
-                    Task task = new Task(async () =>
+
+                    return Task.Run(async () =>
                     {
                         await _pool.WaitAsync();
                         try
@@ -86,14 +87,11 @@ namespace Nethermind.Fossil
                             _pool.Release();
                         }
                     });
-                    return task;
                 }).ToList();
-
-                Task.WhenAll(tasks);
+                Task.WaitAll(tasks.ToArray());
             }
             return Task.CompletedTask;
         }
-
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
