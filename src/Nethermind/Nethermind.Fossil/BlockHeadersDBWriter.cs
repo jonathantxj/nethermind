@@ -62,10 +62,10 @@ namespace Nethermind.Fossil
             NpgsqlDataSource dataSource = NpgsqlDataSource.Create(connectionString);
             // var dropCommand = dataSource.CreateCommand(DROP_TABLES);
             // await dropCommand.ExecuteNonQueryAsync();
-            var createBlockheadersTableCommand = dataSource.CreateCommand(CREATE_BLOCKHEADERS_TABLE);
-            await createBlockheadersTableCommand.ExecuteNonQueryAsync();
-            var createTransactionsTableCommand = dataSource.CreateCommand(CREATE_TRANSACTIONS_TABLE);
-            await createTransactionsTableCommand.ExecuteNonQueryAsync();
+            // var createBlockheadersTableCommand = dataSource.CreateCommand(CREATE_BLOCKHEADERS_TABLE);
+            // await createBlockheadersTableCommand.ExecuteNonQueryAsync();
+            // var createTransactionsTableCommand = dataSource.CreateCommand(CREATE_TRANSACTIONS_TABLE);
+            // await createTransactionsTableCommand.ExecuteNonQueryAsync();
             _logger.Info("[BlockHeadersDBWriter]: Fossil dbWriter setup complete");
             return new BlockHeadersDBWriter(dataSource);
         }
@@ -110,7 +110,7 @@ namespace Nethermind.Fossil
                                 if (rowsAffected > 0) {
                                     int count = 0;
                                     using (var transactionWriter = conn.BeginBinaryImport(
-                                        "copy transactions from STDIN (FORMAT BINARY)"))
+                                        "copy transactions2 from STDIN (FORMAT BINARY)"))
                                     {
                                         foreach (var transaction in block.Transactions)
                                         {

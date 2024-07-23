@@ -49,7 +49,7 @@ namespace Nethermind.Fossil
                 return Task.CompletedTask;
             }
 
-            var lastBlock = ;
+            var lastBlock = 13508844;
             var chunks = blockDb.GetAllValues().Skip(lastBlock + 1).Chunk(100_000);
             _logger.Info("Finished skip");
 
